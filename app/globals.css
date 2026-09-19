@@ -1,26 +1,105 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
+@layer base {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #f5f5f5;
+    --foreground: #0a0a0b;
+    --card: #ffffff;
+    --card-border: rgba(0, 0, 0, 0.08);
+    --line: rgba(0, 0, 0, 0.1);
+    --muted: #52525b;
+    --accent-blue: #3b82f6;
+    --accent-orange: #f97316;
+    --accent-green: #22c55e;
+    --grid-line: rgba(0, 0, 0, 0.04);
+  }
+
+  .dark {
+    --background: #0a0a0b;
+    --foreground: #f5f5f5;
+    --card: rgba(255, 255, 255, 0.02);
+    --card-border: rgba(255, 255, 255, 0.1);
+    --line: rgba(255, 255, 255, 0.1);
+    --muted: #a1a1aa;
+    --accent-blue: #3b82f6;
+    --accent-orange: #f97316;
+    --accent-green: #22c55e;
+    --grid-line: rgba(255, 255, 255, 0.03);
   }
 }
 
 body {
-  background: var(--background);
+  background-color: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  background-image: 
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: center top;
+}
+
+/* Forensic Subtle Scan Beam Animation */
+@keyframes scan-beam {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100vh);
+  }
+}
+
+.scan-beam {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 120px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(59, 130, 246, 0.03) 50%,
+    transparent 100%
+  );
+  pointer-events: none;
+  animation: scan-beam 7s linear infinite;
+  z-index: 40;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scan-beam {
+    display: none;
+  }
+}
+
+/* Technical Console Card Components */
+.console-card {
+  background-color: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.1);
+}
+
+.dark .console-card {
+  box-shadow: 0 4px 30px -4px rgba(0, 0, 0, 0.5);
+}
+
+/* Custom Tactical Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
 }

@@ -1,0 +1,3 @@
+"use client";
+/* eslint-disable react/jsx-no-comment-textnodes */
+export default function Error({ reset }: { reset: () => void }) { return <main className="grid min-h-screen place-items-center p-6 text-center"><div><p className="eyebrow text-orange-500">// SYSTEM FAULT</p><h1 className="mt-4 font-display text-4xl font-bold">The scan hit an unexpected error.</h1><button onClick={reset} className="primary-button mt-6">Try again</button></div></main>; }

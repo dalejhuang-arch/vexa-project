@@ -1,0 +1,3 @@
+import Link from "next/link";
+/* eslint-disable react/jsx-no-comment-textnodes */
+export default function NotFound() { return <main className="grid min-h-screen place-items-center p-6 text-center"><div><p className="eyebrow text-blue-500">// 404 / NO EVIDENCE</p><h1 className="mt-4 font-display text-4xl font-bold">This record does not exist.</h1><Link href="/" className="primary-button mt-6">Return to console</Link></div></main>; }
