@@ -1,15 +1,17 @@
 // lib/mp3Encode.ts
-// Browser-side MP3 encoding via lamejs, so every upload — however long the
-// original recording is — stays safely under Vercel's ~4.5MB serverless
-// request-body ceiling automatically. No manual "shrink it first" step needed.
-import lamejs from "lamejs";
+// Browser-side MP3 encoding via @breezystack/lamejs — a maintained fork of the
+// original lamejs package. The original "lamejs" npm package references a
+// Node-style `global` object that doesn't exist in browser bundles, so it
+// throws `ReferenceError: global is not defined` at runtime. This fork fixes
+// that and ships real TypeScript types, so no ambient .d.ts is needed.
+import { Mp3Encoder } from "@breezystack/lamejs";
 
 // Stay comfortably under Vercel's hard 4.5MB cap, leaving headroom for
 // multipart/form-data overhead and any future growth in that limit's margin.
 const TARGET_BYTES = 4 * 1024 * 1024;
 
-// Standard MP3 bitrates lamejs supports. We pick the highest one that still
-// keeps the whole file under TARGET_BYTES for its duration.
+// Standard MP3 bitrates. We pick the highest one that still keeps the whole
+// file under TARGET_BYTES for its duration.
 const ALLOWED_KBPS = [8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128];
 
 function pickBitrate(durationSec: number): number {
@@ -28,9 +30,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /**
  * Resamples `mono` to 16kHz and encodes it as a mono MP3, dynamically
  * choosing the bitrate so the OUTPUT FILE SIZE is guaranteed to stay under
- * TARGET_BYTES regardless of how long the source recording is. A 30-second
- * clip and a 20-minute clip both come out safely under the limit — the
- * longer one just gets a lower (still speech-clear) bitrate.
+ * TARGET_BYTES regardless of how long the source recording is.
  */
 export async function encodeCompactMp3(mono: Float32Array, sourceRate: number, name: string): Promise<File> {
   const targetRate = 16000;
@@ -48,16 +48,16 @@ export async function encodeCompactMp3(mono: Float32Array, sourceRate: number, n
 
   const durationSec = outLen / targetRate;
   const kbps = pickBitrate(durationSec);
-  const encoder = new lamejs.Mp3Encoder(1, targetRate, kbps);
+  const encoder = new Mp3Encoder(1, targetRate, kbps);
   const chunks: Uint8Array[] = [];
-  const FRAME = 1152; // MPEG frame size lamejs expects per encodeBuffer call
+  const FRAME = 1152; // MPEG frame size the encoder expects per call
 
   for (let i = 0; i < pcm.length; i += FRAME) {
     const slice = pcm.subarray(i, i + FRAME);
     const buf = encoder.encodeBuffer(slice);
     if (buf.length > 0) chunks.push(new Uint8Array(buf));
     // Yield to the main thread periodically so a long recording doesn't
-    // freeze the UI while encoding (mirrors the pattern in measure()).
+    // freeze the UI while encoding.
     if ((i / FRAME) % 400 === 399) await sleep(0);
   }
   const tail = encoder.flush();
