@@ -42,6 +42,7 @@ import {
   Lock,
   Mic,
   Moon,
+  Phone,
   Play,
   Printer,
   Radio,
@@ -57,6 +58,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { heuristicFallback } from "@/lib/heuristicFallback";
+import { encodeCompactMp3 } from "@/lib/mp3Encode";
 import { examples } from "@/data/examples";
 
 /* ═══════════════════════════ TYPES ═══════════════════════════ */
@@ -95,6 +97,8 @@ type Phase = "idle" | "uploading" | "analyzing";
 type Kind = "audio" | "video";
 type Stamp = [number | null, number | null];
 type Marks = { t: number[]; total: number };
+type HeadlineId = "threat" | "empower" | "evidence";
+type RegionId = "us" | "ca" | "uk" | "au";
 
 /* ═══════════════════════════ CONSTANTS ═══════════════════════════ */
 
@@ -135,11 +139,97 @@ const STEPS = [
   { n: "03", title: "See the tricks", body: "Each caller line is checked against seven known tricks and paired with what to say back." },
 ];
 
+/* ═══════════════════════════ HERO: THREE ORIENTED HEADLINES ═══════════════════════════ */
+
+/**
+ * Three framings of the same promise, chosen by the reader:
+ *  · threat    — leads with the mechanic, what the caller is trying to do
+ *  · empower   — leads with what the reader walks away holding
+ *  · evidence  — leads with the forensic receipt, the cybersecurity angle
+ * The subline underneath is shared: input flexibility is a separate message
+ * from the hook, so it never competes with the headline.
+ */
+const HEADLINES: Record<HeadlineId, { tag: string; lead: string; rest: string; sub: string }> = {
+  threat: {
+    tag: "THE TRICK",
+    lead: "Seven tricks.",
+    rest: "See exactly which one they tried on you.",
+    sub: "Upload a recording or paste what was said. Vexa names the tactic on every caller line, then hands you the sentence that ends the call.",
+  },
+  empower: {
+    tag: "THE SKILL",
+    lead: "Spot the next call",
+    rest: "before it finishes.",
+    sub: "One scan teaches the pattern. Vexa shows who said what, flags each pressure move, and gives you the words to say back — so the second call never lands.",
+  },
+  evidence: {
+    tag: "THE RECEIPT",
+    lead: "Who said what,",
+    rest: "and which line gave them away.",
+    sub: "Vexa writes the call down line by line, attributes every turn to caller or victim, and cites the exact tactic behind each red flag.",
+  },
+};
+
+const HEADLINE_ORDER: readonly HeadlineId[] = ["threat", "empower", "evidence"];
+
+/** Three facts that describe the actual pipeline, not a slogan. */
 const HERO_STATS: Array<[string, string]> = [
-  ["7 tricks", "spotted and named"],
-  ["Line by line", "who said what"],
-  ["Audio + text", "either works"],
+  ["7 tactics", "named on every caller line"],
+  ["Speaker-aware", "caller, victim, or unknown"],
+  ["Audio or text", "same report either way"],
 ];
+
+/* ═══════════════════════════ REGION-BASED HELP ROUTES ═══════════════════════════ */
+
+type HelpRoute = { name: string; what: string; url: string; phone?: string };
+type Region = { label: string; routes: HelpRoute[]; note: string };
+
+/**
+ * Static, hand-curated official reporting routes. No geolocation lookup and no
+ * network call: the reader picks their region, we swap the list. That keeps it
+ * working offline, avoids a permissions prompt in a judging context, and means
+ * nothing about the visitor is ever inferred or transmitted.
+ */
+const REGIONS: Record<RegionId, Region> = {
+  us: {
+    label: "United States",
+    note: "Reporting is free and you do not need to have lost money to file.",
+    routes: [
+      { name: "FTC · ReportFraud", what: "General fraud and scam complaints", url: "https://reportfraud.ftc.gov", phone: "1-877-382-4357" },
+      { name: "FBI IC3", what: "Internet crime, imposter and wire fraud", url: "https://www.ic3.gov" },
+      { name: "FCC", what: "Unwanted calls, spoofing, robocalls", url: "https://consumercomplaints.fcc.gov" },
+    ],
+  },
+  ca: {
+    label: "Canada",
+    note: "The CAFC shares reports with police and regulators; filing helps map the campaign.",
+    routes: [
+      { name: "Canadian Anti-Fraud Centre", what: "All fraud types, bilingual, national", url: "https://antifraudcentre-centreantifraude.ca", phone: "1-888-495-8501" },
+      { name: "Competition Bureau", what: "Deceptive telemarketing and sales", url: "https://ised-isde.canada.ca/site/competition-bureau" },
+      { name: "Your bank's fraud line", what: "Use the number printed on your card, not one read to you", url: "https://www.cba.ca" },
+    ],
+  },
+  uk: {
+    label: "United Kingdom",
+    note: "Action Fraud reports feed the National Fraud Intelligence Bureau.",
+    routes: [
+      { name: "Action Fraud", what: "National fraud and cybercrime reporting", url: "https://www.actionfraud.police.uk", phone: "0300 123 2040" },
+      { name: "Ofcom", what: "Nuisance calls, number spoofing", url: "https://www.ofcom.org.uk" },
+      { name: "Take Five", what: "Stop, challenge, protect campaign", url: "https://takefive-stopfraud.org.uk" },
+    ],
+  },
+  au: {
+    label: "Australia",
+    note: "Scamwatch and ReportCyber route reports to the right agency automatically.",
+    routes: [
+      { name: "Scamwatch", what: "Scam reports and alerts", url: "https://www.scamwatch.gov.au" },
+      { name: "ReportCyber", what: "Cybercrime and online fraud", url: "https://www.cyber.gov.au/report-and-recover/report" },
+      { name: "ACCC Infocentre", what: "Consumer and scam enquiries", url: "https://www.accc.gov.au", phone: "1300 302 502" },
+    ],
+  },
+};
+
+const REGION_ORDER: readonly RegionId[] = ["us", "ca", "uk", "au"];
 
 /* ═══════════════════════════ HELPERS ═══════════════════════════ */
 
@@ -252,39 +342,6 @@ function normalizeReport(raw: unknown): Report {
 const transcriptOf = (segments: Segment[]) => segments.map((s) => `${speakerLabel(s.speaker)}: ${s.text}`).join("\n");
 
 /* ═══════════════════════════ AUDIO ANALYSIS ═══════════════════════════ */
-
-function encodeCompactWav(mono: Float32Array, sourceRate: number, name: string): File {
-  const target = 16000;
-  const ratio = sourceRate / target;
-  const outLen = Math.floor(mono.length / ratio);
-  const buffer = new ArrayBuffer(44 + outLen * 2);
-  const view = new DataView(buffer);
-  const write = (offset: number, s: string) => {
-    for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i));
-  };
-  write(0, "RIFF");
-  view.setUint32(4, 36 + outLen * 2, true);
-  write(8, "WAVE");
-  write(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, target, true);
-  view.setUint32(28, target * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  write(36, "data");
-  view.setUint32(40, outLen * 2, true);
-  for (let i = 0; i < outLen; i++) {
-    const a = Math.floor(i * ratio);
-    const b = Math.max(a + 1, Math.floor((i + 1) * ratio));
-    let sum = 0;
-    for (let k = a; k < b; k++) sum += mono[k] ?? 0;
-    const v = clamp(sum / (b - a), -1, 1);
-    view.setInt16(44 + i * 2, v < 0 ? v * 0x8000 : v * 0x7fff, true);
-  }
-  return new File([buffer], name, { type: "audio/wav" });
-}
 
 async function decodeToMono(source: Blob): Promise<{ mono: Float32Array; sr: number }> {
   const Ctor: typeof AudioContext | undefined =
@@ -438,8 +495,10 @@ async function prepareAudio(source: File): Promise<Prep> {
   const base = source.name.replace(/\.[^.]+$/, "") || "audio";
   let note = "";
   if (m.peak < 0.001) note = "There's no speech in this file — it's silent.";
-  const compact = !extracted && source.size > 4 * 1024 * 1024 ? encodeCompactWav(mono, sr, `${base}-compact.wav`) : null;
-  return { telemetry: m.telemetry, summary: m.summary, uploadWav: extracted ?? compact, playbackWav: extracted, note };
+  // Always compress for upload — guarantees we stay under Vercel's body-size
+  // limit no matter how long or large the original recording is.
+  const compact = await encodeCompactMp3(mono, sr, base);
+  return { telemetry: m.telemetry, summary: m.summary, uploadWav: compact, playbackWav: extracted, note };
 }
 
 /* ═══════════════════════════ STYLES ═══════════════════════════ */
@@ -708,6 +767,24 @@ html.light .dz{background:radial-gradient(130% 140% at 50% 0%,var(--acc-dim),tra
 .hero-in{animation:vx-hero .5s cubic-bezier(.16,1,.3,1) both}
 @keyframes vx-hero{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 
+/* ── headline switcher: three framings, one hero ── */
+.hl-switch{display:inline-flex;flex-wrap:wrap;gap:2px;border:1px solid var(--line);background:var(--bg-soft);padding:2px}
+.hl-tab{display:inline-flex;align-items:center;gap:.45rem;border:0;background:transparent;color:var(--muted);
+  font-family:var(--vx-mono);font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;
+  padding:.4rem .7rem;transition:color .14s,background .14s}
+.hl-tab:hover{color:var(--ink);background:var(--acc-dim)}
+.hl-tab[aria-pressed="true"]{color:var(--acc);background:var(--acc-dim);box-shadow:inset 0 0 0 1px var(--acc-line)}
+.hl-tab i{display:block;width:6px;height:6px;background:currentColor;opacity:.7}
+.hl-line{animation:vx-hero .38s cubic-bezier(.16,1,.3,1) both}
+
+/* ── region help routes ── */
+.help-grid{display:grid;gap:1px;background:var(--line)}
+.help-cell{background:var(--bg-soft);padding:1.25rem}
+@media (min-width:768px){.help-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.help-link{display:inline-flex;align-items:center;gap:.4rem;color:var(--acc);border-bottom:1px solid var(--acc-line);padding-bottom:1px;transition:opacity .12s}
+.help-link:hover{opacity:.65}
+@media (prefers-reduced-motion:reduce){.hl-line{animation:none!important}}
+
 /* ── classification rubber stamp ── */
 .vexa-root{--stamp-hot:#FF6A57;--stamp-warn:#FFB347;--stamp-ok:#25E39B}
 html.light .vexa-root{--stamp-hot:#B3271A;--stamp-warn:#8A5A00;--stamp-ok:#067D57}
@@ -928,6 +1005,120 @@ function SpeakerBadge({ speaker }: { speaker: Speaker }) {
       ? "box-acc"
       : "border border-[color:var(--line)] text-[color:var(--muted)]";
   return <span className={`px inline-block w-[4.8rem] shrink-0 px-1.5 py-1 text-center text-[9px] ${cls}`}>{speakerLabel(speaker)}</span>;
+}
+
+/* ═══════════════════════════ HERO HEADLINE SWITCHER ═══════════════════════════ */
+
+/**
+ * Picks between the three oriented headlines. The chosen framing swaps both the
+ * H1 and the subline underneath, so each option is genuinely a different pitch
+ * rather than a restated title. State only — no routing, no storage.
+ */
+function HeadlineSwitch() {
+  const [id, setId] = useState<HeadlineId>("threat");
+  const h = HEADLINES[id];
+  return (
+    <div>
+      <div className="hl-switch no-print" role="group" aria-label="Choose how Vexa describes itself">
+        {HEADLINE_ORDER.map((option) => (
+          <button
+            key={option}
+            type="button"
+            className="hl-tab"
+            aria-pressed={id === option}
+            onClick={() => setId(option)}
+          >
+            <i aria-hidden="true" />
+            {HEADLINES[option].tag}
+          </button>
+        ))}
+      </div>
+
+      <h1 key={id} className="font-display hl-line mt-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-2xl leading-tight sm:text-3xl">
+        <span className="hero-mark">
+          <VexaMark size={34} />
+        </span>
+        <span>
+          <span className="acc">{h.lead}</span> {h.rest}
+        </span>
+      </h1>
+
+      <p key={`${id}-sub`} className="hl-line mt-3 max-w-2xl text-[13px] leading-relaxed text-[color:var(--muted)]" style={{ fontFamily: "var(--vx-sans)" }}>
+        {h.sub}
+      </p>
+    </div>
+  );
+}
+
+/* ═══════════════════════════ REGION HELP ROUTES ═══════════════════════════ */
+
+/**
+ * "If this was you" routes, chosen by region rather than looked up from a
+ * location signal. Deliberately static: no geolocation permission, no third
+ * party call, and nothing about the reader leaves the page. Each entry names
+ * the official body, what it handles, and (where one exists) a phone line.
+ */
+function HelpRoutes() {
+  const [region, setRegion] = useState<RegionId>("ca");
+  const r = REGIONS[region];
+  return (
+    <section className="mt-16" aria-labelledby="help-title">
+      <header className="mb-4 flex flex-wrap items-end justify-between gap-3 border-b border-[color:var(--line)] pb-3">
+        <div className="min-w-0">
+          <h2 id="help-title" className="kicker acc flex items-center gap-2">
+            <Phone size={13} /> IF THIS CALL WAS REAL
+          </h2>
+          <p className="mt-2 max-w-2xl text-[12.5px] leading-relaxed text-[color:var(--muted)]" style={{ fontFamily: "var(--vx-sans)" }}>
+            Reporting a scam call takes minutes and helps map the campaign. Pick where you are and use the official route — never a number the caller gave you.
+          </p>
+        </div>
+        <div className="hl-switch no-print" role="group" aria-label="Choose your region">
+          {REGION_ORDER.map((option) => (
+            <button key={option} type="button" className="hl-tab" aria-pressed={region === option} onClick={() => setRegion(option)}>
+              <i aria-hidden="true" />
+              {REGIONS[option].label}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <p key={`${region}-note`} className="hl-line mb-3 text-[11.5px] leading-relaxed text-[color:var(--muted)]" style={{ fontFamily: "var(--vx-sans)" }}>
+        {r.note}
+      </p>
+
+      <ul key={region} className="help-grid border border-[color:var(--line)]">
+        {r.routes.map((route) => (
+          <li key={route.name} className="help-cell hl-line">
+            <div className="flex items-center gap-2 text-[11.5px] font-semibold tracking-[.1em] uppercase">
+              <ShieldCheck size={13} className="acc shrink-0" />
+              <span className="truncate">{route.name}</span>
+            </div>
+            <p className="mt-2 text-[12px] leading-relaxed text-[color:var(--muted)]" style={{ fontFamily: "var(--vx-sans)" }}>
+              {route.what}
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+              <a className="help-link text-[11px]" href={route.url} target="_blank" rel="noopener noreferrer">
+                <Crosshair size={11} /> Visit official site
+              </a>
+              {route.phone && (
+                <span className="kicker text-[color:var(--muted)]">
+                  <Lock size={10} className="acc mr-1.5 inline" />
+                  {route.phone}
+                </span>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      <p className="mt-3 flex items-start gap-2 text-[11px] leading-relaxed text-[color:var(--muted)]">
+        <Info size={12} className="acc mt-0.5 shrink-0" />
+        <span>
+          These are public, official routes listed for convenience. Vexa is not affiliated with them, does not contact them on your behalf, and cannot give legal advice — if money has already moved, call your bank first.
+        </span>
+      </p>
+    </section>
+  );
 }
 
 /* ═══════════════════════════ LIVE STAGE TIMERS ═══════════════════════════ */
@@ -2427,8 +2618,7 @@ export default function Page() {
     setAnStamp([performance.now(), null]);
     const started = Date.now();
     try {
-      const compact = uploadWavRef.current;
-      const toUpload = compact && compact.size < file.size ? compact : compact && file.size > 14 * 1024 * 1024 ? compact : file;
+      const toUpload = uploadWavRef.current ?? file;
       let json: unknown;
       try {
         json = await uploadWithProgress(toUpload);
@@ -2512,22 +2702,14 @@ export default function Page() {
     <Shell>
       <ThemeCorner />
       <main className="mx-auto max-w-[1440px] px-4 pb-24 pt-10 sm:px-6">
-        {/* ── brief: animated mark, one short line, one row of facts ── */}
+        {/* ── brief: three oriented headlines, one short line, one row of facts ── */}
         <section className="hero-in mb-8 border-b border-[color:var(--line)] pb-8">
           <span className="kicker acc inline-flex items-center gap-2">
             <Crosshair size={12} /> CHECK A SUSPICIOUS CALL
           </span>
-          <h1 className="font-display mt-5 flex items-center gap-3 text-2xl leading-tight sm:text-3xl">
-            <span className="hero-mark">
-              <VexaMark size={34} />
-            </span>
-            <span>
-              <span className="acc">Vexa</span> hears the scam before it lands.
-            </span>
-          </h1>
-          <p className="mt-3 max-w-2xl text-[13px] leading-relaxed text-[color:var(--muted)]" style={{ fontFamily: "var(--vx-sans)" }}>
-            Upload a recording or paste what was said. Vexa writes it down, shows who said what, names every trick the caller used, and gives you the words to say back.
-          </p>
+          <div className="mt-4">
+            <HeadlineSwitch />
+          </div>
           <ul className="mt-5 flex flex-wrap items-center gap-x-6 gap-y-2">
             {HERO_STATS.map(([k, v]) => (
               <li key={k} className="kicker flex items-center gap-2 text-[color:var(--muted)]">
@@ -2911,6 +3093,9 @@ export default function Page() {
             ))}
           </ol>
         </section>
+
+        {/* ── region-based reporting routes ── */}
+        <HelpRoutes />
 
         <div id="glossary" className="mt-6 scroll-mt-24">
           <TacticGlossary />
