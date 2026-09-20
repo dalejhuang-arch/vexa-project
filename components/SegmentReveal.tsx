@@ -6,12 +6,12 @@ import { ChevronDown, Play } from "lucide-react";
 import type { Segment } from "@/lib/schema";
 import { TACTIC_META } from "@/lib/tacticMeta";
 
-type Filter = "all" | "flagged" | "caller" | "recipient";
+type Filter = "all" | "flagged" | "caller" | "victim";
 const FILTERS: Array<[Filter, string]> = [
   ["all", "All"],
   ["flagged", "Flagged"],
   ["caller", "Caller"],
-  ["recipient", "Recipient"],
+  ["victim", "Victim"],
 ];
 
 function fmt(t: number) {
@@ -93,7 +93,7 @@ export function SegmentReveal({
           const Icon = meta.icon;
           const flagged = segment.tactic !== "none";
           const expanded = open.has(index);
-          const isRecipient = segment.speaker === "recipient";
+          const isVictim = segment.speaker === "victim";
 
           const content = (
             <>
@@ -107,13 +107,13 @@ export function SegmentReveal({
                 {segment.speaker && segment.speaker !== "unknown" && (
                   <span
                     className={`mb-1 inline-block rounded px-1.5 py-0.5 font-mono text-[9px] tracking-widest ${
-                      isRecipient ? "bg-blue-500/10 text-blue-500" : "bg-[var(--line)] text-[var(--muted)]"
+                      isVictim ? "bg-blue-500/10 text-blue-500" : "bg-[var(--line)] text-[var(--muted)]"
                     }`}
                   >
                     {segment.speaker.toUpperCase()}
                   </span>
                 )}
-                <span className={`block text-sm leading-relaxed ${isRecipient ? "text-[var(--muted)]" : ""}`}>
+                <span className={`block text-sm leading-relaxed ${isVictim ? "text-[var(--muted)]" : ""}`}>
                   {segment.text}
                 </span>
               </span>
@@ -121,13 +121,13 @@ export function SegmentReveal({
                 className={`ml-2 flex shrink-0 items-center gap-1.5 self-start rounded-full border px-2.5 py-1 font-mono text-[10px] tracking-wide ${
                   flagged
                     ? "border-orange-500/40 bg-orange-500/10 text-orange-500"
-                    : isRecipient
+                    : isVictim
                     ? "border-transparent text-transparent"
                     : "border-emerald-500/30 text-emerald-500"
                 }`}
               >
-                {(flagged || !isRecipient) && <Icon size={12} />}
-                {flagged ? meta.label.toUpperCase() : isRecipient ? "" : "CLEAR"}
+                {(flagged || !isVictim) && <Icon size={12} />}
+                {flagged ? meta.label.toUpperCase() : isVictim ? "" : "CLEAR"}
                 {flagged && (
                   <ChevronDown size={12} className={`transition ${expanded ? "rotate-180" : ""}`} />
                 )}

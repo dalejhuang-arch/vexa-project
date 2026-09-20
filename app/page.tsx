@@ -53,7 +53,6 @@ import {
   Terminal,
   Upload,
   UserX,
-  Wifi,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -530,8 +529,11 @@ html.light .vexa-root{
 html.light .scanlines{display:none}
 .vx-content{position:relative;z-index:2}
 
-/* ── chrome ── */
-.vx-topbar{background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+/* ── chrome: no bar any more, just the theme switch parked in the corner ── */
+.vx-theme-corner{position:fixed;top:.75rem;right:.75rem;z-index:50;
+  display:flex;align-items:center;padding:.25rem;
+  border:1px solid var(--line);background:color-mix(in srgb,var(--bg) 84%,transparent);
+  backdrop-filter:blur(14px)}
 .led{position:relative;display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--acc)}
 .led::after{content:"";position:absolute;inset:0;border-radius:50%;background:var(--acc);animation:vx-ping 2.4s ease-out infinite}
 .led-hot{background:var(--hot)} .led-hot::after{background:var(--hot)}
@@ -787,7 +789,7 @@ function VexaMark({ size = 24, className = "", animated = true }: { size?: numbe
   );
 }
 
-/** Mark + wordmark + the tagline that says what this is. Used in the top bar. */
+/** Mark + wordmark + the tagline that says what this is. Kept for reuse. */
 function VexaLogo() {
   return (
     <span className="vx-brand">
@@ -843,19 +845,15 @@ function ThemeToggle() {
   );
 }
 
-function SysClock() {
-  const [now, setNow] = useState("--:--:--");
-  useEffect(() => {
-    const tick = () => setNow(new Date().toISOString().slice(11, 19));
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, []);
+/**
+ * The only chrome left: the theme switch, parked in the top-right corner.
+ * There is no top bar any more, so the hero is the first thing you read.
+ */
+function ThemeCorner() {
   return (
-    <span className="hidden text-[11px] tabular-nums text-[color:var(--muted)] sm:inline">
-      {now}
-      <span className="opacity-40"> UTC</span>
-    </span>
+    <div className="vx-theme-corner no-print">
+      <ThemeToggle />
+    </div>
   );
 }
 
@@ -865,34 +863,8 @@ function Shell({ children }: { children: React.ReactNode; beam?: boolean }) {
       <style dangerouslySetInnerHTML={{ __html: STYLES }} />
       <div className="gridfield" aria-hidden="true" />
       <div className="scanlines" aria-hidden="true" />
-      <div className="vx-content min-h-screen pt-16">{children}</div>
+      <div className="vx-content min-h-screen">{children}</div>
     </div>
-  );
-}
-
-/** Top bar: the brand carries the "what is this" line; the label carries the page context. */
-function TopBar({ label }: { label: string }) {
-  return (
-    <header className="vx-topbar no-print fixed inset-x-0 top-0 z-50">
-      <div className="mx-auto flex h-16 max-w-[1440px] items-stretch justify-between gap-4 px-4 sm:px-6">
-        <div className="flex items-center gap-4">
-          <VexaLogo />
-          <span className="hidden h-6 w-px bg-[color:var(--line-2)] sm:block" aria-hidden="true" />
-          <span className="kicker hidden text-[color:var(--muted)] sm:block">{label}</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <SysClock />
-          <span className="hidden items-center gap-1.5 text-[10.5px] tracking-[.14em] text-[color:var(--muted)] lg:flex">
-            <Wifi size={12} className="acc" /> CONNECTED
-          </span>
-          <span className="hidden items-center gap-1.5 text-[10.5px] tracking-[.14em] text-[color:var(--muted)] lg:flex">
-            <ShieldCheck size={12} className="acc" /> NOTHING SAVED
-          </span>
-          <ThemeToggle />
-        </div>
-      </div>
-      <div className="rule" aria-hidden="true" />
-    </header>
   );
 }
 
@@ -2016,9 +1988,9 @@ function ReportView({
 
   return (
     <Shell>
-      <TopBar label="CALL REPORT" />
+      <ThemeCorner />
       <ScrollCue />
-      <main className="mx-auto max-w-[1440px] px-4 py-8 sm:px-6">
+      <main className="mx-auto max-w-[1440px] px-4 pb-8 pt-16 sm:px-6">
         <div className="no-print mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-[color:var(--line)] pb-4">
           <button type="button" onClick={onReset} className="tog">
             <ArrowLeft size={12} /> CHECK ANOTHER CALL
@@ -2510,7 +2482,7 @@ export default function Page() {
 
   return (
     <Shell>
-      <TopBar label="NEW SCAN" />
+      <ThemeCorner />
       <main className="mx-auto max-w-[1440px] px-4 pb-24 pt-10 sm:px-6">
         {/* ── brief: animated mark, one short line, one row of facts ── */}
         <section className="hero-in mb-8 border-b border-[color:var(--line)] pb-8">

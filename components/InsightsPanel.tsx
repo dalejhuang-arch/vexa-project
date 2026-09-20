@@ -67,9 +67,9 @@ export function InsightsPanel({ report }: { report: Analysis }) {
 
     const words = (s: string) => s.trim().split(/\s+/).length;
     const callerWords = segs.filter((s) => s.speaker === "caller").reduce((n, s) => n + words(s.text), 0);
-    const recipientWords = segs.filter((s) => s.speaker === "recipient").reduce((n, s) => n + words(s.text), 0);
+    const victimWords = segs.filter((s) => s.speaker === "victim").reduce((n, s) => n + words(s.text), 0);
     const talkShare =
-      callerWords + recipientWords > 0 ? Math.round((callerWords / (callerWords + recipientWords)) * 100) : null;
+      callerWords + victimWords > 0 ? Math.round((callerWords / (callerWords + victimWords)) * 100) : null;
 
     let running = 0;
     const cumulative = segs.map((s) => (running += TACTIC_META[s.tactic].weight));
