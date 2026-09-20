@@ -534,6 +534,13 @@ html.light .scanlines{display:none}
   display:flex;align-items:center;padding:.25rem;
   border:1px solid var(--line);background:color-mix(in srgb,var(--bg) 84%,transparent);
   backdrop-filter:blur(14px)}
+/* the nudge that tells a first-time visitor the switch is there */
+.vx-theme-hint-text{font-family:var(--vx-mono);font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--acc);padding:0 .6rem 0 .25rem;white-space:nowrap;animation:vx-hint-in .45s cubic-bezier(.16,1,.3,1) both}
+.vx-theme-halo{position:absolute;inset:-3px;border:1px solid var(--acc);pointer-events:none;
+  animation:vx-theme-flash 2s ease-out infinite}
+@keyframes vx-theme-flash{0%{opacity:.85;transform:scale(1)}70%,100%{opacity:0;transform:scale(1.4)}}
+@keyframes vx-hint-in{from{opacity:0;transform:translateX(5px)}to{opacity:1;transform:none}}
 .led{position:relative;display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--acc)}
 .led::after{content:"";position:absolute;inset:0;border-radius:50%;background:var(--acc);animation:vx-ping 2.4s ease-out infinite}
 .led-hot{background:var(--hot)} .led-hot::after{background:var(--hot)}
@@ -615,6 +622,8 @@ html.light .dz{background:radial-gradient(130% 140% at 50% 0%,var(--acc-dim),tra
   .vx-mark-ring,.vx-mark-arc{animation:none!important}
   .vx-mark-scan{animation:none!important;opacity:0}
   .vx-cell:hover{transform:none}
+  .vx-theme-halo{animation:none!important;opacity:.85}
+  .vx-theme-hint-text{animation:none!important}
 }
 @media print{
   .no-print,.gridfield,.scanlines{display:none!important}
@@ -802,8 +811,8 @@ function VexaLogo() {
   );
 }
 
-function ThemeToggle() {
-  const [dark, setDark] = useState(true);
+function ThemeToggle({ onFirstToggle }: { onFirstToggle?: () => void }) {
+  const [dark, setDark] = useState(false);
   useEffect(() => {
     const root = document.documentElement;
     if (!root.classList.contains("dark") && !root.classList.contains("light")) {
@@ -813,11 +822,12 @@ function ThemeToggle() {
       } catch {
         stored = null;
       }
-      const prefersLight = window.matchMedia?.("(prefers-color-scheme: light)").matches ?? false;
-      const next = stored ?? (prefersLight ? "light" : "dark");
+      // Light is the default first impression; the corner switch flips to dark and back.
+      const next = stored ?? "light";
       root.classList.toggle("dark", next === "dark");
       root.classList.toggle("light", next === "light");
     }
+    root.style.colorScheme = root.classList.contains("dark") ? "dark" : "light";
     setDark(root.classList.contains("dark"));
   }, []);
   function toggle() {
@@ -832,6 +842,7 @@ function ThemeToggle() {
       /* storage blocked */
     }
     setDark(next);
+    onFirstToggle?.();
   }
   return (
     <button
@@ -848,11 +859,19 @@ function ThemeToggle() {
 /**
  * The only chrome left: the theme switch, parked in the top-right corner.
  * There is no top bar any more, so the hero is the first thing you read.
+ * Light is the default, and until someone touches the switch it wears a
+ * pulsing halo plus a short label so nobody misses that dark mode is there.
  */
 function ThemeCorner() {
+  const [hint, setHint] = useState(true);
+  const stop = useCallback(() => setHint(false), []);
   return (
     <div className="vx-theme-corner no-print">
-      <ThemeToggle />
+      {hint && <span className="vx-theme-hint-text hidden sm:inline">DARK MODE?</span>}
+      <span className="relative inline-flex">
+        <ThemeToggle onFirstToggle={stop} />
+        {hint && <span className="vx-theme-halo" aria-hidden="true" />}
+      </span>
     </div>
   );
 }
@@ -2122,6 +2141,7 @@ export default function Page() {
 
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const hudRef = useRef<HTMLElement | null>(null);
   const uploadWavRef = useRef<File | null>(null);
   const loadToken = useRef(0);
   const previewRef = useRef("");
@@ -2159,6 +2179,14 @@ export default function Page() {
     const id = setTimeout(() => panelRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 180);
     return () => clearTimeout(id);
   }, [preview]);
+
+  // When a scan starts (text or media) bring the analyzer up under a small top gap,
+  // so the running progress card sits neatly at the top of the screen instead of mid-page.
+  useEffect(() => {
+    if (!busy) return;
+    const id = setTimeout(() => hudRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 140);
+    return () => clearTimeout(id);
+  }, [busy]);
 
   const clearMedia = useCallback(() => {
     loadToken.current += 1;
@@ -2512,7 +2540,7 @@ export default function Page() {
         </section>
 
         {/* ── intake console ── */}
-        <section className="hud" aria-label="Analyzer">
+        <section ref={hudRef} className="hud scroll-mt-3" aria-label="Analyzer">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[color:var(--line)] px-4 py-3 sm:px-5">
             <div className="flex items-center gap-3">
               <ScanSearch size={14} className="acc" />
