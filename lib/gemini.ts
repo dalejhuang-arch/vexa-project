@@ -19,7 +19,7 @@ import {
 
 type FallbackReason = NonNullable<Analysis["fallbackReason"]>;
 
-const PER_MODEL_TIMEOUT_MS = 20_000;
+const PER_MODEL_TIMEOUT_MS = 24_000;
 class GeminiTimeout extends Error {}
 class SchemaError extends Error {}
 
@@ -27,7 +27,7 @@ export const responseSchema = {
   type: Type.OBJECT,
   properties: {
     riskScore: { type: Type.INTEGER },
-    category: { type: Type.STRING, enum: [...categories] },
+    category: { type: Type.STRING },
     summary: { type: Type.STRING },
     segments: {
       type: Type.ARRAY,
@@ -47,38 +47,46 @@ export const responseSchema = {
   required: ["riskScore", "category", "summary", "segments"],
 };
 
-export const ANALYST_RULES = `
-CATEGORIES: ${categories.map((c) => `"${c}"`).join(", ")}.
+function analystRules(authoritative: boolean): string {
+  const hintRule = authoritative
+    ? `Hint is CALLER / VICTIM when known (ground truth, never contradict it) or "?" when unknown.`
+    : `Hint is CALLER / VICTIM / "?" taken from pasted text. Pasted labels are OFTEN WRONG or swapped (e.g. a line labelled VICTIM that says "Now type exactly what I say" is really the CALLER). Decide the true speaker of every turn from the whole conversation and the rules below; override the hint whenever context contradicts it.`;
+  return `
+CATEGORY: write a specific 2-4 word label for the scam type (e.g. "Tech Support Scam", "Bank Refund Scam", "Gift Card Extortion", "Utility Rebate Scam", "Government Imposter Scam"). Prefer these canonical names when they fit: ${categories.filter((c) => c !== "Other/Unclear").map((c) => `"${c}"`).join(", ")}. Never answer "Other/Unclear"; for a benign call use "Legitimate Call".
 
-INPUT: numbered turns "id | speaker hint | text". Hint is CALLER / VICTIM when known (ground truth, never contradict it) or "?" when unknown.
+INPUT: numbered turns "id | speaker hint | text". ${hintRule}
+Ignore stray annotation words that leaked into the text (e.g. a bare "Clear", "Threat", "Urgency").
 OUTPUT: EXACTLY one segment per input turn, same order, "turn" = the input id. NEVER skip, merge or add turns. Short replies ("Yes.", "Okay", "But what is this?") get their own segment.
 
-SPEAKERS (for "?" hints) - reason over the WHOLE conversation:
-- CALLER placed the call: introduces themselves or an organization, makes claims, gives instructions, asks for things, uses formal/scripted language, robocall/IVR voices.
-- VICTIM received the call: answers, asks worried/clarifying questions ("Who is this?", "How much?"), agrees, hesitates, pushes back.
-- A short greeting at the very start ("Hello?") is the victim answering. Speakers normally alternate, but a caller may speak several turns in a row.
+SPEAKERS - reason over the WHOLE conversation:
+- CALLER placed the call: introduces themselves or an organization, makes claims, gives instructions ("type", "click", "go to", "read me"), asks for things, uses formal/scripted language, robocall/IVR voices.
+- VICTIM received the call: answers, asks worried/clarifying questions ("Is my money safe?", "How much?"), reports what they see or did ("I typed it", "Okay, I did that"), agrees, hesitates, pushes back.
+- A short greeting at the very start is the victim answering, except a scripted opener like "Thank you for calling Tech Support" which is the caller's. Speakers normally alternate, but a caller may speak several turns in a row.
 
-TACTICS (one dominant per CALLER turn, else "none"). Victim turns are ALWAYS "none" but use them as context (compliance or doubt shows how the caller's pressure landed).
-- urgency: deadline or time pressure ("within 48 hours", "right now", "before the warrant is issued").
-- authority_impersonation: claims to be a government agent, investigator, bank, utility, tech company, lawyer; titles, case numbers, official-sounding departments, bureaucratic jargon meant to sound official.
-- isolation: keeps the victim from consulting anyone or verifying: "don't tell anyone", "stay on the line", "do not disconnect", hold placements.
-- threat: arrest, warrant, lawsuit, legal action, frozen account, deportation, harm, "escalate to authorities".
-- too_good_to_be_true: prize, rebate, refund, grant, guaranteed returns, unexpected money.
-- payment_request: any demand for money: gift cards, crypto, wire, cash, down payment, "settlement", bail, refundable deposit, verification/processing fees.
-- personal_info_request: SSN/SIN, birth date, card or account or meter numbers, passwords, OTP codes, remote access, "press 1 to verify".
-Judge a line by its FUNCTION in context, not keywords. "We will never ask for your password" is not a request. "This is not an accusation" followed by pressure IS pressure. A line that only introduces the caller without pressure can be "none", but a fake official title is authority_impersonation.
+TACTICS (one dominant per CALLER turn, else "none"). Victim turns are ALWAYS "none" but use them as context (compliance or doubt shows how the pressure landed).
+- urgency: deadline or time pressure ("right now", "time is running out", "before the warrant is issued").
+- authority_impersonation: claims to be a government agent, investigator, bank, utility, tech company, lawyer; official-sounding titles, "government-certified software", "federal refund", bureaucratic jargon meant to sound official.
+- isolation: keeps the victim from consulting anyone or verifying: "don't tell the teller why", "stay on the line", "do not hang up", "do not touch your computer", coaching a cover story for staff or family.
+- threat: arrest, jail, lawsuit, frozen account, hackers stealing data, "your identity is being stolen", harm, "the police will come".
+- too_good_to_be_true: prize, rebate, refund, grant, guaranteed returns, unexpected money, "federal refund".
+- payment_request: any demand for money or value: gift cards, crypto, wire, cash withdrawals, down payment, bail, "return the overpayment", fees.
+- personal_info_request: SSN/SIN, birth date, card or account numbers, gift-card codes or PINs, passwords, OTP codes, remote-access IDs, "read me the ID and password", entering bank credentials, "press 1 to verify", installing remote-access software.
+Judge a line by its FUNCTION in context, not keywords. "We will never ask for your password" is not a request. "This is not an accusation" followed by pressure IS pressure. Fake technical theater ("this black box is the secure mainframe", scrolling text = hackers) is authority_impersonation or threat. A line that only introduces the caller without pressure can be "none", but a fake official title is authority_impersonation. When a caller turn contains several tactics, pick the one that most advances the fraud (payment/info requests outrank the rest).
 
 LEGITIMATE CALLS: appointment reminders, delivery notices, family chat and normal customer service with no payment demand, secrecy, credential ask or coercion are LEGITIMATE. Do not invent tactics. Score 0-15.
 
-RISK: 0-15 benign; 16-34 unusual; 35-64 suspicious; 65-84 strong scam pattern; 85-100 textbook scam (payment demand plus threat/authority/isolation).
+RISK: 0-15 benign; 16-34 unusual; 35-64 suspicious; 65-84 strong scam pattern; 85-100 textbook scam (payment demand plus threat/authority/isolation). A completed cash or gift-card extraction is 95+.
 counterAdvice: for flagged turns one short concrete sentence the victim could say. Empty string for "none".
-summary: ONE plain-language sentence.
+summary: ONE plain-language sentence naming the scam and how it pressured the victim.
 Never invent audio observations.
 `;
+}
 
-const SYSTEM_PROMPT = `You are a forensic phone-scam analyst for a cybersecurity threat-intelligence tool.
-${ANALYST_RULES}
-Return ONLY JSON: {"riskScore":0,"category":"Other/Unclear","summary":"","segments":[{"turn":1,"speaker":"caller","tactic":"none","explanation":"","counterAdvice":""}]}`;
+export const ANALYST_RULES = analystRules(true);
+
+const systemPrompt = (authoritative: boolean) => `You are a forensic phone-scam analyst for a cybersecurity threat-intelligence tool.
+${analystRules(authoritative)}
+Return ONLY JSON: {"riskScore":0,"category":"","summary":"","segments":[{"turn":1,"speaker":"caller","tactic":"none","explanation":"","counterAdvice":""}]}`;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -134,6 +142,12 @@ function toTactic(v: unknown): TacticValue {
   return alias[k] ?? "none";
 }
 
+function cleanCategory(v: string): string {
+  const c = v.replace(/[\r\n]+/g, " ").replace(/^["'\s]+|["'\s.]+$/g, "").slice(0, 48).trim();
+  if (!c || /^other\/?unclear$/i.test(c) || /^unknown$/i.test(c)) return "";
+  return c;
+}
+
 function finalize(raw: string | undefined, turns: Turn[], authoritative: boolean): Analysis {
   if (!raw) throw new SchemaError("Empty model response");
   let json: unknown;
@@ -173,9 +187,10 @@ function finalize(raw: string | undefined, turns: Turn[], authoritative: boolean
   if (flagged === 0) risk = Math.min(risk, 20);
   risk = Math.max(0, Math.min(100, Math.round(risk)));
 
-  const modelCat = str(obj.category);
-  let category = (categories as readonly string[]).includes(modelCat) ? (modelCat as (typeof categories)[number]) : "Other/Unclear";
-  if (category === "Other/Unclear" && flagged > 0) category = detectCategory(segments.filter((s) => s.speaker !== "victim").map((s) => s.text).join(" "));
+  let category = cleanCategory(str(obj.category));
+  if (!category) {
+    category = flagged > 0 ? detectCategory(segments.filter((s) => s.speaker !== "victim").map((s) => s.text).join(" ")) : "Legitimate Call";
+  }
 
   return {
     riskScore: risk,
@@ -191,7 +206,7 @@ function finalize(raw: string | undefined, turns: Turn[], authoritative: boolean
 type Step = { model: string; schema: boolean };
 function ladder(): Step[] {
   const env = (process.env.GEMINI_MODELS ?? "").split(",").map((s) => s.trim().replace(/^models\//, "")).filter(Boolean);
-  const uniq = Array.from(new Set([...env, "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]));
+  const uniq = Array.from(new Set([...env, "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"]));
   const steps: Step[] = uniq.map((model) => ({ model, schema: true }));
   steps.push({ model: uniq[0] ?? "gemini-flash-latest", schema: false }, { model: uniq[1] ?? "gemini-2.5-flash", schema: false });
   return steps;
@@ -207,6 +222,7 @@ export async function analyzeTurns(turns: Turn[], opts: AnalyzeOpts = {}): Promi
   const lines = turns.map((t, i) => `${i + 1} | ${t.speaker && t.speaker !== "unknown" ? t.speaker.toUpperCase() : "?"} | ${t.text}`);
   const cadence = opts.audioSummary ? `\n\nVOCAL CADENCE SUMMARY: ${JSON.stringify(opts.audioSummary)}` : "";
   const contents = `TURNS (${turns.length}). Return exactly ${turns.length} segments.\n${lines.join("\n")}${cadence}`;
+  const system = systemPrompt(authoritative);
 
   const started = Date.now();
   const budget = opts.budgetMs ?? 42_000;
@@ -221,7 +237,7 @@ export async function analyzeTurns(turns: Turn[], opts: AnalyzeOpts = {}): Promi
             model: step.model,
             contents,
             config: {
-              systemInstruction: SYSTEM_PROMPT,
+              systemInstruction: system,
               responseMimeType: "application/json",
               temperature: 0.1,
               maxOutputTokens: 16384,
@@ -246,7 +262,8 @@ export async function analyzeTurns(turns: Turn[], opts: AnalyzeOpts = {}): Promi
   throw lastError ?? new Error("All Gemini models failed.");
 }
 
+/** Pasted transcripts: labels are hints only, the analyst re-attributes speakers from context. */
 export async function analyzeWithGemini(transcript: string, audioSummary?: AudioSummary): Promise<Analysis> {
   const turns = parseTurns(transcript);
-  return analyzeTurns(turns.length ? turns : [{ text: transcript.trim() }], { audioSummary });
+  return analyzeTurns(turns.length ? turns : [{ text: transcript.trim() }], { audioSummary, authoritative: false });
 }

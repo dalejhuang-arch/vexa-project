@@ -11,6 +11,7 @@ export const tactics = [
   "personal_info_request",
 ] as const;
 
+/** Canonical names the analyst should prefer when they fit. The model may write its own 2-4 word label. */
 export const categories = [
   "Government Imposter Scam",
   "Grandparent/Family Emergency Scam",
@@ -65,7 +66,7 @@ export const segmentSchema = z.object({
 
 export const analysisSchema = z.object({
   riskScore: z.number().int().min(0).max(100),
-  category: z.enum(categories).catch("Other/Unclear"),
+  category: z.string().trim().min(1).max(60).catch("Suspicious Call"),
   verdict: verdictSchema.optional(),
   summary: z.string().min(1),
   tacticCounts: tacticCountsSchema.default({
@@ -86,7 +87,7 @@ export const analysisSchema = z.object({
 
 export type Tactic = (typeof tactics)[number];
 export type TacticValue = Tactic | "none";
-export type Category = (typeof categories)[number];
+export type Category = string;
 export type Speaker = "caller" | "victim" | "unknown";
 export type Verdict = z.infer<typeof verdictSchema>;
 export type AudioSummary = z.infer<typeof audioSummarySchema>;

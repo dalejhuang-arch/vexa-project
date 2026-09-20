@@ -5,6 +5,30 @@ export type Turn = { speaker?: Speaker; text: string; start?: number };
 
 const ABBREV = /\b(Mrs|Mr|Ms|Dr|St|Jr|Sr|No|vs|Inc|Ltd)\./g;
 
+/* Exports from call-analysis tools look like:  "05 \n CALLER \n text \n Threat".
+   Strip the index numbers and tag words, and fold the bare label onto the text line. */
+const BARE_LABEL = /^(caller|scammer|agent|operator|speaker\s*a|you|victim|recipient|me|user|customer|speaker\s*b)$/i;
+const TAG_LINE = /^(clear|threat|urgency|false authority|info request|isolation|payment request|too good to be true)$/i;
+
+function normalizeExport(raw: string): string {
+  const lines = raw.replace(/\r\n?/g, "\n").split("\n").map((s) => s.trim());
+  if (!lines.some((l) => BARE_LABEL.test(l))) return raw;
+  const out: string[] = [];
+  let pending = "";
+  for (const l of lines) {
+    if (!l) continue;
+    if (/^\d{1,4}$/.test(l)) continue;
+    if (TAG_LINE.test(l)) continue;
+    if (BARE_LABEL.test(l)) {
+      pending = l;
+      continue;
+    }
+    out.push(pending ? `${pending}: ${l}` : l);
+    pending = "";
+  }
+  return out.join("\n");
+}
+
 export function splitTurns(raw: string): string[] {
   const text = raw.replace(/\r\n?/g, "\n").replace(/^[^\S\n]*\d+(?=[A-Z])/, "").trim();
   if (!text) return [];
@@ -32,9 +56,11 @@ export function splitTurns(raw: string): string[] {
 const LABEL_RE =
   /^\s*(?:\[?\d{1,2}:\d{2}(?::\d{2})?\]?\s*)?(caller|scammer|agent|operator|speaker\s*a|you|victim|recipient|me|user|customer|speaker\s*b|person|a|b)\s*[:\-–—]\s*(.*)$/i;
 
-/** Splits a transcript into turns and reads explicit speaker labels (CALLER:/YOU:/VICTIM:...) when present. */
+/** Splits a transcript into turns and reads explicit speaker labels (CALLER:/YOU:/VICTIM:...) when present.
+ *  Labels are treated as hints only; the analyst re-checks them against context. */
 export function parseTurns(raw: string): Turn[] {
-  const spaced = raw.replace(/\s+(?=(?:CALLER|SCAMMER|YOU|VICTIM|RECIPIENT)\s*:)/g, "\n");
+  const cleaned = normalizeExport(raw);
+  const spaced = cleaned.replace(/\s+(?=(?:CALLER|SCAMMER|YOU|VICTIM|RECIPIENT)\s*:)/g, "\n");
   const turns: Turn[] = [];
   for (const part of splitTurns(spaced)) {
     const m = LABEL_RE.exec(part);

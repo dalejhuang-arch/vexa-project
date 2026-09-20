@@ -3,7 +3,6 @@ import {
   categories,
   tactics,
   type Analysis,
-  type Category,
   type Segment,
   type Speaker,
   type Tactic,
@@ -29,24 +28,24 @@ export const TACTIC_COUNTER: Record<Tactic, string> = {
   threat: "Real agencies don't threaten arrest over the phone. I'm ending this call and checking directly.",
   too_good_to_be_true: "I didn't enter anything, and legitimate offers never need upfront fees. No thank you.",
   payment_request: "I won't pay by gift card, crypto or wire. Send an official invoice by mail.",
-  personal_info_request: "I never share personal details on an inbound call. I'll contact you through official channels.",
+  personal_info_request: "I never share personal details or remote access on an inbound call. I'll contact you through official channels.",
 };
 
 const PATTERNS: Record<Tactic, RegExp> = {
   urgency:
-    /\b(right now|immediately|urgent(?:ly)?|today|within (?:the )?(?:next )?(?:hour|\d+)|minutes?|last chance|expires?|deadline|before it'?s too late|act now|asap|hurry|quickly|no time|final notice|must be claimed)\b/gi,
+    /\b(right now|immediately|urgent(?:ly)?|today|within (?:the )?(?:next )?(?:hour|\d+)|minutes?|last chance|expires?|deadline|before it'?s too late|act now|asap|hurry|quickly|no time|final notice|must be claimed|time is running out)\b/gi,
   authority_impersonation:
-    /\b(irs|cra|revenue agency|social security|fbi|police|officer|investigator|badge|microsoft|apple support|amazon|fraud department|security team|government|federal|agent|attorney|lawyer|technician|windows support|department|commission|sheriff|court|case number)\b/gi,
+    /\b(irs|cra|revenue agency|social security|fbi|police|officer|investigator|badge|microsoft|apple support|amazon|fraud department|security team|government|federal|agent|attorney|lawyer|technician|windows support|department|commission|sheriff|court|case number|tech support|certified)\b/gi,
   isolation:
-    /\b(don'?t tell|do not tell|keep (?:this|it) (?:a )?secret|between us|don'?t (?:hang up|call anyone|discuss|disconnect)|do not (?:hang up|speak to anyone|discuss|disconnect)|stay on the line|remain on the line|gag order|confidential|don'?t talk to)\b/gi,
+    /\b(don'?t tell|do not tell|keep (?:this|it) (?:a )?secret|between us|don'?t (?:hang up|call anyone|discuss|disconnect)|do not (?:hang up|speak to anyone|discuss|disconnect|touch)|stay on the line|remain on the line|gag order|confidential|don'?t talk to|do not let)\b/gi,
   threat:
-    /\b(arrest(?:ed)?|warrant|lawsuit|sued|jail|prison|deport(?:ed|ation)?|frozen|suspended|seize[ds]?|legal action|criminal|penalt(?:y|ies)|fines?|hackers?|compromised|virus|infected|charges|prosecut\w*)\b/gi,
+    /\b(arrest(?:ed)?|warrant|lawsuit|sued|jail|prison|deport(?:ed|ation)?|frozen|suspended|seize[ds]?|legal action|criminal|penalt(?:y|ies)|fines?|hackers?|compromised|virus|infected|charges|prosecut\w*|police will|identity is being stolen)\b/gi,
   too_good_to_be_true:
     /\b(you(?:'ve| have)? won|winner|prize|lottery|jackpot|guaranteed|free|refund|rebate|risk[- ]free|double your|inheritance|selected|waive|lifetime|eligible to receive)\b/gi,
   payment_request:
-    /\b(gift cards?|wire|bitcoin|crypto(?:currency)?|western union|money transfer|zelle|e-?transfer|pay(?:ment)?|send (?:me )?money|cash|bail|fee|deposit|down payment|google play|itunes|escrow|settle(?:ment)?)\b/gi,
+    /\b(gift cards?|wire|bitcoin|crypto(?:currency)?|western union|money transfer|zelle|e-?transfer|pay(?:ment)?|send (?:me )?money|cash|bail|fee|deposit|down payment|google play|itunes|escrow|settle(?:ment)?|withdraw|scratch off|safety cards?)\b/gi,
   personal_info_request:
-    /\b(social (?:security|insurance)|ssn|password|passcode|pin|one[- ]time (?:code|password)|verification code|card number|account number|meter number|date of birth|routing number|remote access|anydesk|teamviewer|full name|last four|confirm your (?:address|identity))\b/gi,
+    /\b(social (?:security|insurance)|ssn|password|passcode|pin|one[- ]time (?:code|password)|verification code|card number|account number|meter number|date of birth|routing number|remote access|anydesk|teamviewer|ultraviewer|full name|last four|confirm your (?:address|identity)|username|read me the|who do you bank)\b/gi,
 };
 
 const PRIORITY: Tactic[] = [
@@ -121,9 +120,11 @@ export function inferSpeakers(turns: Turn[]): Speaker[] {
   return out;
 }
 
-const CATEGORY_PATTERNS: Array<[Category, RegExp]> = [
+const STRONG_TECH = /\b(ultraviewer|anydesk|teamviewer|remote access|pop-?up|cmd|command prompt|firewall|virus|malware|your computer|tech support|network is|secure your network)\b/gi;
+
+const CATEGORY_PATTERNS: Array<[string, RegExp]> = [
   ["Grandparent/Family Emergency Scam", /\b(grandma|grandpa|grandson|granddaughter|grandmother|grandfather|it'?s me|car accident|in jail|bail)\b/gi],
-  ["Tech Support Scam", /\b(microsoft|windows|virus|malware|remote access|anydesk|teamviewer|technician|your computer|ip address)\b/gi],
+  ["Tech Support Scam", /\b(microsoft|windows|virus|malware|remote access|anydesk|teamviewer|ultraviewer|technician|your computer|ip address)\b/gi],
   ["Government Imposter Scam", /\b(irs|cra|revenue|social security|social insurance|warrant|taxes|government|federal|customs|immigration|investigator|fbi|court|arrest)\b/gi],
   ["Romance Scam", /\b(sweetheart|darling|my love|romance|lonely|soulmate|never met)\b/gi],
   ["Prize/Lottery Scam", /\b(prize|lottery|winner|jackpot|sweepstakes|you(?:'ve| have)? won|rebate|eligible to receive)\b/gi],
@@ -131,8 +132,9 @@ const CATEGORY_PATTERNS: Array<[Category, RegExp]> = [
   ["Bank/Financial Institution Imposter Scam", /\b(bank|fraud department|debit card|credit card|account (?:number|has been))\b/gi],
 ];
 
-export function detectCategory(text: string): Category {
-  let best: Category = "Other/Unclear";
+export function detectCategory(text: string): string {
+  if ((text.match(STRONG_TECH) ?? []).length >= 2) return "Tech Support Scam";
+  let best = "Other/Unclear";
   let top = 0;
   for (const [name, re] of CATEGORY_PATTERNS) {
     const hits = (text.match(re) ?? []).length;
@@ -141,7 +143,7 @@ export function detectCategory(text: string): Category {
       best = name;
     }
   }
-  return categories.includes(best) ? best : "Other/Unclear";
+  return best === "Other/Unclear" ? "Suspicious Call" : best;
 }
 
 export function riskFromCounts(counts: Record<Tactic, number>, flagged: number, total: number): number {
@@ -178,7 +180,7 @@ export function neutralNote(speaker: Speaker): string {
     : "Context-setting line with no request, pressure or credential ask.";
 }
 
-export function buildSummary(category: Category, counts: Record<Tactic, number>, flagged: number): string {
+export function buildSummary(category: string, counts: Record<Tactic, number>, flagged: number): string {
   if (!flagged) return "No clear manipulation tactics were found, but stay cautious with unexpected callers who ask for money or personal details.";
   const top = tactics
     .filter((t) => counts[t] > 0)
@@ -222,3 +224,5 @@ export function heuristicFallback(transcript: string): Analysis {
   const turns = parseTurns(transcript);
   return heuristicTurns(turns.length ? turns : [{ text: transcript.trim() || "(empty)" }]);
 }
+
+export { categories };
