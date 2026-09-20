@@ -497,8 +497,13 @@ async function prepareAudio(source: File): Promise<Prep> {
   if (m.peak < 0.001) note = "There's no speech in this file — it's silent.";
   // Always compress for upload — guarantees we stay under Vercel's body-size
   // limit no matter how long or large the original recording is.
-  const compact = await encodeCompactMp3(mono, sr, base);
-  return { telemetry: m.telemetry, summary: m.summary, uploadWav: compact, playbackWav: extracted, note };
+let compact: File | null = null;
+try {
+  compact = await encodeCompactMp3(mono, sr, base);
+} catch (err) {
+  console.warn("MP3 compression failed, will upload original file:", err);
+}
+return { telemetry: m.telemetry, summary: m.summary, uploadWav: compact, playbackWav: extracted, note };
 }
 
 /* ═══════════════════════════ STYLES ═══════════════════════════ */
