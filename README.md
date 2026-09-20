@@ -1,6 +1,6 @@
 # Vexa
 
-Vexa is a scam-call forensics console for cybersecurity analysis. Paste a suspicious call transcript, or try one of the cached examples, to see the manipulation tactic used on each segment, an overall risk score, and a practical counter-response.
+Vexa is a scam-call forensics console for cybersecurity analysis. Paste a suspicious call transcript, recording, or try a example, and see the manipulation tactic used on each segment, an overall risk score, and a practical counter-response.
 
 ## Features
 
@@ -30,4 +30,8 @@ npm run typecheck
 npm run build
 ```
 
-AI disclosure: Vexa uses AI to organize evidence, not to make legal or financial decisions. Review findings before acting.
+   ## AI usage disclosure
+
+   **Built with AI assistance:** Claude and Gemini were used during development to help write and debug code.
+
+   **AI in the product:** Vexa uses Gemini (via `@google/genai`) as its core analysis engine to detect and explain manipulation tactics in call transcripts, with a local rule-based fallback for reliability. AI output is used to organize evidence, not to make legal or financial decisions — review findings before acting.
