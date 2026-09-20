@@ -22,8 +22,15 @@ export const categories = [
   "Other/Unclear",
 ] as const;
 
+export function normalizeSpeaker(v: unknown): "caller" | "victim" | "unknown" {
+  const s = String(v ?? "").toLowerCase().trim();
+  if (/^(caller|scammer|agent|operator|attacker|robocall|speaker ?a|a)$/.test(s)) return "caller";
+  if (/^(victim|recipient|you|user|target|customer|receiver|speaker ?b|b)$/.test(s)) return "victim";
+  return "unknown";
+}
+
 export const tacticSchema = z.enum([...tactics, "none"] as const);
-export const speakerSchema = z.enum(["caller", "recipient", "unknown"]);
+export const speakerSchema = z.preprocess(normalizeSpeaker, z.enum(["caller", "victim", "unknown"]));
 export const verdictSchema = z.enum(["likely_scam", "suspicious", "likely_legitimate"]);
 
 export const audioSummarySchema = z.object({
@@ -50,10 +57,10 @@ export const tacticCountsSchema = z.object({
 export const segmentSchema = z.object({
   text: z.string().min(1),
   timestamp: z.number().nonnegative().optional(),
-  speaker: speakerSchema.optional().default("caller"),
+  speaker: speakerSchema,
   tactic: tacticSchema,
   explanation: z.string().default("Neutral conversational turn."),
-  counterAdvice: z.string().default("Standard protocol verification."),
+  counterAdvice: z.string().default(""),
 });
 
 export const analysisSchema = z.object({
@@ -80,7 +87,7 @@ export const analysisSchema = z.object({
 export type Tactic = (typeof tactics)[number];
 export type TacticValue = Tactic | "none";
 export type Category = (typeof categories)[number];
-export type Speaker = z.infer<typeof speakerSchema>;
+export type Speaker = "caller" | "victim" | "unknown";
 export type Verdict = z.infer<typeof verdictSchema>;
 export type AudioSummary = z.infer<typeof audioSummarySchema>;
 export type Segment = z.infer<typeof segmentSchema> & { tactic: TacticValue };

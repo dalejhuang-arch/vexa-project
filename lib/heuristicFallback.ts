@@ -1,316 +1,224 @@
-// lib/heuristicFallback.ts — offline engine. Gemini is the accurate path; this keeps the app useful without it.
-import type { Analysis, Category, Segment, Speaker, Tactic, Verdict } from "./schema";
-import { tactics } from "./schema";
-import { splitTurns } from "./transcript";
+// lib/heuristicFallback.ts  (pure TS: safe on server AND in the browser)
+import {
+  categories,
+  tactics,
+  type Analysis,
+  type Category,
+  type Segment,
+  type Speaker,
+  type Tactic,
+  type TacticValue,
+  type Verdict,
+} from "./schema";
+import { parseTurns, type Turn } from "./transcript";
 
-type Signal = [RegExp, number];
+export const TACTIC_EXPLAIN: Record<Tactic, string> = {
+  urgency: "Creates artificial time pressure so you skip verification.",
+  authority_impersonation: "Claims an official role to borrow credibility it hasn't earned.",
+  isolation: "Tries to keep you away from anyone who could challenge the story.",
+  threat: "Uses fear of consequences to override your judgment.",
+  too_good_to_be_true: "Offers an unrealistic reward to lower your guard.",
+  payment_request: "Requests money through channels that are hard to trace or reverse.",
+  personal_info_request: "Tries to collect identity details, codes or device access.",
+};
 
-const CALLER_LABEL = /^\s*(caller|scammer|agent|officer|rep(?:resentative)?|operator|them|suspect|fraudster)\s*:\s*/i;
-const RECIPIENT_LABEL = /^\s*(you|victim|recipient|me|user|target|customer|grandma|grandpa|grandmother|grandfather)\s*:\s*/i;
-const ANY_LABEL = /^\s*[A-Za-z][A-Za-z .'-]{0,24}:\s+/;
+export const TACTIC_COUNTER: Record<Tactic, string> = {
+  urgency: "I don't make decisions under pressure. I'll verify this myself and call you back.",
+  authority_impersonation: "Give me your name and a case number. I'll hang up and call the official number myself.",
+  isolation: "I talk big decisions over with family. If this is legitimate, that won't be a problem.",
+  threat: "Real agencies don't threaten arrest over the phone. I'm ending this call and checking directly.",
+  too_good_to_be_true: "I didn't enter anything, and legitimate offers never need upfront fees. No thank you.",
+  payment_request: "I won't pay by gift card, crypto or wire. Send an official invoice by mail.",
+  personal_info_request: "I never share personal details on an inbound call. I'll contact you through official channels.",
+};
 
-const SIGNALS: Record<Tactic, Signal[]> = {
-  payment_request: [
-    [/\bgift ?cards?\b/i, 5],
-    [/\b(bitcoin|crypto(?:currency)?|western union|moneygram|zelle|cash ?app|venmo|paypal|wire (?:transfer|the|money)|money order|itunes|steam card)\b/i, 4],
-    [/\$\s?\d[\d,]*/, 3],
-    [/\b\d[\d,.]*\s?(?:dollars|usd|bucks)\b/i, 3],
-    [/\b(?:verification|processing|release|administrative|reconciliation) (?:payment|fee|adjustment|deposit)\b/i, 4],
-    [/\b(?:bail|bond|guarantor|retainer|deposit|settlement)\b/i, 2],
-    [/\b(?:pay|payment|payments|fees?|send (?:the )?(?:money|funds)|transfer the funds)\b/i, 1],
-    [/\b(?:returned|refunded|reimbursed) (?:upon|after|once)\b/i, 2],
-    [/\b(?:receiving funds|making a payment|using your bank account)\b/i, 2],
-  ],
-  personal_info_request: [
-    [/\b(?:verification|security|one-?time|confirmation|access) (?:code|pin)\b/i, 5],
-    [/\b(?:ssn|social security number)\b/i, 5],
-    [/\b(?:card|account|routing) number\b/i, 4],
-    [/\b(?:cvv|password|passcode|pin number|date of birth|mother'?s maiden)\b/i, 4],
-    [/\b(?:remote access|anydesk|teamviewer|ultraviewer|screen ?share)\b/i, 5],
-    [/\b(?:install|download)\b/i, 2],
-    [/\bverify (?:that )?(?:i'?m|i am|you are|your (?:identity|account|credentials|name|address))\b/i, 2],
-    [/\b(?:confirm|verify)\b.{0,40}\b(?:account holder|identity|address)\b/i, 2],
-  ],
-  threat: [
-    [/\b(?:arrest(?:ed|s)?|warrant|jail|prison|incarcerat\w*|criminal|prosecut\w*|indict\w*|felony|charges?)\b/i, 4],
-    [/\b(?:lawsuit|legal action|penalt(?:y|ies)|fines?|seiz\w+|garnish\w*|deport\w*)\b/i, 3],
-    [/\b(?:unless you|or else|you (?:do not|don'?t) have a choice|no choice|consequences?)\b/i, 4],
-    [/\b(?:frozen|suspended|locked (?:out|permanently)|compromised|hacked|infected|malware|virus|trojan)\b/i, 3],
-    [/\b(?:escalat\w+|pending release|under (?:administrative )?(?:review|investigation)|irregularit\w+|flagged|disputed)\b/i, 2],
-    [/\b(?:legal (?:status|matter|liaison|action)|fraud[- ]monitoring)\b/i, 1],
-  ],
-  isolation: [
-    [/\b(?:do not|don'?t|never) (?:disconnect|hang up|end the call|tell|share this|discuss|mention|contact|call)\b/i, 4],
-    [/\b(?:remain|stay) on the (?:line|phone|call)\b/i, 4],
-    [/\b(?:keep (?:this|it) (?:confidential|secret|private|quiet|between us)|between us|nobody (?:needs to|can) know)\b/i, 4],
-    [/\b(?:place|put) you on (?:a )?(?:brief |short )?hold\b/i, 2],
-    [/\b(?:unsecured line|not (?:talk|speak) to anyone|without telling|mom or dad)\b/i, 3],
-    [/\bconfidential\b/i, 2],
-  ],
-  urgency: [
-    [/\b(?:immediately|right now|right away|at once|urgent(?:ly)?|asap|as soon as possible|hurry|act now|time[- ]sensitive|no time|before it'?s too late)\b/i, 4],
-    [/\b(?:within|in the next) (?:the )?(?:hour|\d+ (?:minutes?|hours?)|24 hours|two hours|few minutes)\b/i, 4],
-    [/\b(?:today|tonight|by (?:end of day|close of business|midnight)|before \d)\b/i, 2],
-    [/\b(?:remain calm|stay calm|don'?t panic)\b/i, 3],
-    [/\bat your computer\b/i, 2],
-  ],
-  authority_impersonation: [
-    [/\b(?:my name is|this is)\b.{0,60}\b(?:from|with|calling)\b/i, 2],
-    [/\bcalling (?:you )?from\b/i, 3],
-    [/\b(?:i'?m|i am) (?:the |a |an )?(?:assigned |senior |lead |special |federal |licensed |certified )?(?:agent|officer|investigator|attorney|lawyer|liaison|representative|technician|specialist|manager|detective|analyst|supervisor|director)\b/i, 3],
-    [/\b(?:division|department|bureau|agency|compliance|liaison|representative|officer|agent|investigator|attorney|lawyer|judge|court|badge|case (?:number|id)|irs|internal revenue|social security|medicare|microsoft|apple support|amazon|fraud (?:team|department)|security team|marshals?|police|fbi|federal)\b/i, 2],
-    [/\b(?:interinstitutional|reconciliation|disbursement|authorization|determination|protocol|administrative|jurisdiction|regulatory)\b/i, 1],
-    [/\b(?:not (?:authorized|permitted|able) to|for security reasons|per (?:our )?(?:policy|protocol))\b/i, 2],
-  ],
-  too_good_to_be_true: [
-    [/\b(?:you(?:'ve| have)? (?:won|been selected)|winner|lottery|sweepstakes|prize|jackpot)\b/i, 5],
-    [/\b(?:refund|reimburse\w*|grant|windfall|inheritance|unclaimed)\b/i, 2],
-    [/\b(?:guaranteed|risk[- ]free|double your|no risk|limited (?:time )?offer)\b/i, 4],
-    [/\b(?:returns?|profit|roi)\b.{0,30}\b(?:daily|weekly|monthly|%)\b/i, 3],
-  ],
+const PATTERNS: Record<Tactic, RegExp> = {
+  urgency:
+    /\b(right now|immediately|urgent(?:ly)?|today|within (?:the )?(?:next )?(?:hour|\d+)|minutes?|last chance|expires?|deadline|before it'?s too late|act now|asap|hurry|quickly|no time|final notice|must be claimed)\b/gi,
+  authority_impersonation:
+    /\b(irs|cra|revenue agency|social security|fbi|police|officer|investigator|badge|microsoft|apple support|amazon|fraud department|security team|government|federal|agent|attorney|lawyer|technician|windows support|department|commission|sheriff|court|case number)\b/gi,
+  isolation:
+    /\b(don'?t tell|do not tell|keep (?:this|it) (?:a )?secret|between us|don'?t (?:hang up|call anyone|discuss|disconnect)|do not (?:hang up|speak to anyone|discuss|disconnect)|stay on the line|remain on the line|gag order|confidential|don'?t talk to)\b/gi,
+  threat:
+    /\b(arrest(?:ed)?|warrant|lawsuit|sued|jail|prison|deport(?:ed|ation)?|frozen|suspended|seize[ds]?|legal action|criminal|penalt(?:y|ies)|fines?|hackers?|compromised|virus|infected|charges|prosecut\w*)\b/gi,
+  too_good_to_be_true:
+    /\b(you(?:'ve| have)? won|winner|prize|lottery|jackpot|guaranteed|free|refund|rebate|risk[- ]free|double your|inheritance|selected|waive|lifetime|eligible to receive)\b/gi,
+  payment_request:
+    /\b(gift cards?|wire|bitcoin|crypto(?:currency)?|western union|money transfer|zelle|e-?transfer|pay(?:ment)?|send (?:me )?money|cash|bail|fee|deposit|down payment|google play|itunes|escrow|settle(?:ment)?)\b/gi,
+  personal_info_request:
+    /\b(social (?:security|insurance)|ssn|password|passcode|pin|one[- ]time (?:code|password)|verification code|card number|account number|meter number|date of birth|routing number|remote access|anydesk|teamviewer|full name|last four|confirm your (?:address|identity))\b/gi,
 };
 
 const PRIORITY: Tactic[] = [
   "payment_request",
+  "personal_info_request",
   "threat",
   "isolation",
-  "personal_info_request",
-  "urgency",
   "authority_impersonation",
+  "urgency",
   "too_good_to_be_true",
 ];
 
 const WEIGHT: Record<Tactic, number> = {
-  payment_request: 28,
-  personal_info_request: 20,
-  threat: 18,
-  isolation: 16,
-  authority_impersonation: 14,
-  too_good_to_be_true: 12,
-  urgency: 10,
+  payment_request: 20,
+  personal_info_request: 16,
+  threat: 14,
+  isolation: 12,
+  authority_impersonation: 10,
+  urgency: 8,
+  too_good_to_be_true: 8,
 };
 
-const EXPLAIN: Record<Tactic, { why: string; advice: string }> = {
-  payment_request: {
-    why: "The caller pushes for money through an unusual, unverifiable, or hard-to-reverse channel.",
-    advice: "I won't send any money based on a phone call. I'll verify with the institution or person directly.",
-  },
-  personal_info_request: {
-    why: "The caller seeks credentials, identifiers, or control of your device.",
-    advice: "I never share codes or personal details with inbound callers, or install anything they ask for.",
-  },
-  threat: {
-    why: "The caller invokes arrest, legal trouble, or loss to frighten you into compliance.",
-    advice: "Real agencies don't threaten arrest by phone. I'm hanging up and calling the agency on its official number.",
-  },
-  isolation: {
-    why: "The caller tries to keep you on the line or away from people who could spot the scam.",
-    advice: "I'm hanging up to talk to my family first. Anything legitimate can wait ten minutes.",
-  },
-  urgency: {
-    why: "The caller manufactures time pressure to short-circuit careful thinking.",
-    advice: "I don't make decisions under a deadline. I'll call back on a number I look up myself.",
-  },
-  authority_impersonation: {
-    why: "The caller borrows the credibility of an institution or official role, often with dense jargon.",
-    advice: "Give me your name and department — I'll call the organization's public number to confirm.",
-  },
-  too_good_to_be_true: {
-    why: "The caller dangles an unearned reward or guaranteed return to lower your guard.",
-    advice: "I didn't enter anything, and real prizes never cost money. Please remove this number.",
-  },
-};
+const NEGATED =
+  /\b(?:we|i|they|(?:the )?\w+)\s+(?:will\s+)?(?:never|do not|don'?t|won'?t)\s+(?:ask|request|require|accept)[^.!?]*[.!?]?/gi;
 
-const MIN_SCORE = 3;
-
-function detectTactic(body: string): Tactic | null {
-  let best: Tactic | null = null;
+export function detectTactic(text: string, speaker: Speaker): TacticValue {
+  if (speaker === "victim") return "none";
+  const clean = text.replace(NEGATED, " ");
+  let best: Tactic | undefined;
   let bestScore = 0;
-  for (const tactic of PRIORITY) {
-    const score = SIGNALS[tactic].reduce((sum, [re, w]) => sum + (re.test(body) ? w : 0), 0);
-    if (score >= MIN_SCORE && score > bestScore) {
-      best = tactic;
+  for (const id of PRIORITY) {
+    let score = (clean.match(PATTERNS[id]) ?? []).length;
+    if (id === "payment_request" && /\$\s?\d/.test(clean) && /\b(pay|settle|balance|deposit|owe|owed|down payment)\b/i.test(clean)) score += 1;
+    if (id === "urgency" && /\b(within|next|in)\s+(?:the\s+)?(?:next\s+)?\d+\s*(?:hours?|minutes?|days?)\b/i.test(clean)) score += 1;
+    if (id === "personal_info_request" && /\bpress\s*\d\b/i.test(clean) && /\b(verify|claim|confirm|account|meter)\b/i.test(clean)) score += 1;
+    if (score > bestScore) {
+      best = id;
       bestScore = score;
     }
   }
-  return best;
+  return best ?? "none";
 }
 
-/** Positive = caller-like, negative = recipient-like. */
-function scoreCaller(text: string): number {
-  const t = text.trim();
-  let s = 0;
-  if (t.length > 140) s += 2;
-  if (t.length > 260) s += 1;
-  if (t.length < 50) s -= 1.5;
-  if (t.endsWith("?") && t.length < 100) s -= 2;
-  if (/^(?:what|how|why|who|where|is|are|can|could|do|does|will|would)\b.*\?$/i.test(t) && t.length < 110) s -= 1.5;
-  if (/^(?:oh|okay|ok|yes|yeah|no|hello\??|hi|um|uh|but|wait|i don'?t|i can'?t|i'?m not|i have|i think|is he|is my|how much)\b/i.test(t)) s -= 2;
-  if (/\bmy (?:grandson|granddaughter|son|daughter|husband|wife|account|bank)\b/i.test(t) && t.length < 90) s -= 1;
-  if (/\b(?:ma'?am|sir|mrs\.?|mr\.?|i need you to|i'?m calling from|you need to|please (?:do not|don'?t|remain|stay)|our (?:records|system|office)|in order to|i'?m going to|this is (?:not|a)\b)/i.test(t)) s += 2;
-  if (/^(?:understood|good (?:morning|afternoon|evening)|i understand|essentially|your role|the procedure|the preliminary|i cannot|i can request|i'?m not authorized|however)\b/i.test(t)) s += 2;
-  return s;
-}
+const VICTIM_CUE =
+  /^(?:yes|yeah|yep|no|nope|okay|ok|um+|uh+|hello|hi|hey|what|who|why|how|when|where|wait|sorry|but|so|really|oh|huh|excuse me|i\s+(?:don'?t|do not|didn'?t|can'?t|cannot|am|was|have|haven'?t|will|just|think|thought|need|want|already)|my\s|am i|is (?:this|that|he|she|it)|are you|can you|could you|do i|does)\b/i;
+const CALLER_CUE =
+  /\b(?:this is|my name is|calling (?:from|about|regarding)|we (?:are|have|require|need|will|received|detected)|you (?:must|need to|have to|will|are (?:eligible|required|being)|owe|won|have been|were)|please (?:press|hold|listen|stay|remain|do not)|your (?:account|social|case|warrant|computer|file|card|meter|package)|press \d|do not (?:hang|disconnect|tell)|remain calm|for security purposes|be advised)\b/i;
 
-/** Two-state Viterbi with an alternation prior: conversations mostly alternate. */
-function inferSpeakers(turns: string[], forced: Array<Speaker | null>): Speaker[] {
-  const n = turns.length;
-  if (n === 0) return [];
-  const emis = turns.map((t, i) => (forced[i] === "caller" ? 12 : forced[i] === "recipient" ? -12 : scoreCaller(t)));
-  const STAY = -1.1;
-
-  let p0 = 0; // recipient
-  let p1 = 0; // caller
-  const back: Array<[0 | 1, 0 | 1]> = [];
-  for (let i = 0; i < n; i++) {
-    const e = emis[i]!;
-    const from0 = Math.max(p0 + STAY, p1);
-    const from0Idx: 0 | 1 = p0 + STAY >= p1 ? 0 : 1;
-    const from1 = Math.max(p1 + STAY, p0);
-    const from1Idx: 0 | 1 = p1 + STAY >= p0 ? 1 : 0;
-    back.push([from0Idx, from1Idx]);
-    p0 = from0 - e;
-    p1 = from1 + e;
-  }
-  const out: Speaker[] = new Array(n).fill("unknown");
-  let state: 0 | 1 = p1 >= p0 ? 1 : 0;
-  for (let i = n - 1; i >= 0; i--) {
-    const weak = Math.abs(emis[i]!) < 1 && forced[i] === null;
-    out[i] = weak && n < 3 ? "unknown" : state === 1 ? "caller" : "recipient";
-    state = back[i]![state];
-  }
+/** Context-aware speaker inference for unlabeled transcripts. Explicit labels always win. */
+export function inferSpeakers(turns: Turn[]): Speaker[] {
+  const out: Speaker[] = [];
+  turns.forEach((t, i) => {
+    if (t.speaker && t.speaker !== "unknown") {
+      out.push(t.speaker);
+      return;
+    }
+    const words = t.text.split(/\s+/).length;
+    let caller = 0;
+    let victim = 0;
+    if (VICTIM_CUE.test(t.text.trim())) victim += 2;
+    if (/\?\s*$/.test(t.text) && words <= 14) victim += 1.5;
+    if (words <= 6) victim += 1;
+    if (CALLER_CUE.test(t.text)) caller += 2;
+    if (words >= 25) caller += 1;
+    if (/\$\s?\d|\d{3,}/.test(t.text)) caller += 1;
+    const diff = caller - victim;
+    const prev = out[i - 1];
+    if (diff >= 1) out.push("caller");
+    else if (diff <= -1) out.push("victim");
+    else out.push(prev === "caller" ? "victim" : prev === "victim" ? "caller" : "caller");
+  });
   return out;
 }
 
-const CATEGORY_RULES: Array<{ category: Category; signals: Signal[] }> = [
-  {
-    category: "Grandparent/Family Emergency Scam",
-    signals: [
-      [/\b(?:grandma|grandpa|grandmother|grandfather|grandson|granddaughter|nana|papa)\b/i, 3],
-      [/\b(?:bail|guarantor|pending release)\b/i, 2],
-      [/\b(?:accident|hospital|jail|arrested|car crash|family contact)\b/i, 1],
-      [/\bmom or dad\b|\bdisappointed\b|\bit'?s me\b/i, 1],
-    ],
-  },
-  {
-    category: "Government Imposter Scam",
-    signals: [
-      [/\b(?:irs|internal revenue|social security|ssa|treasury|medicare)\b/i, 3],
-      [/\b(?:marshals?|federal|customs|immigration)\b/i, 2],
-      [/\bwarrant\b|\bback taxes\b|\btax(?:es)? owed\b/i, 2],
-    ],
-  },
-  {
-    category: "Tech Support Scam",
-    signals: [
-      [/\b(?:microsoft|windows support|apple support)\b/i, 3],
-      [/\b(?:malware|virus|trojan|infect(?:ed|ions?)|hacked)\b/i, 2],
-      [/\b(?:anydesk|teamviewer|remote access|support tool|eventvwr)\b/i, 3],
-    ],
-  },
-  {
-    category: "Bank/Financial Institution Imposter Scam",
-    signals: [
-      [/\b(?:bank|credit union|fraud (?:team|department)|debit card|credit card|financial)\b/i, 2],
-      [/\baccount\b|\bsuspicious (?:activity|transaction)\b|\bcredentials\b/i, 1],
-      [/\boverseas\b|\bwire transfer\b|\btransfer\b/i, 1],
-    ],
-  },
-  { category: "Prize/Lottery Scam", signals: [[/\b(?:you(?:'ve| have)? won|winner|lottery|prize|sweepstakes)\b/i, 3]] },
-  {
-    category: "Investment/Crypto Scam",
-    signals: [
-      [/\b(?:guaranteed returns?|trading platform|invest(?:ment|ing)?|portfolio)\b/i, 2],
-      [/\b(?:bitcoin|crypto(?:currency)?)\b/i, 1],
-    ],
-  },
-  { category: "Romance Scam", signals: [[/\b(?:soulmate|my darling|love you|deployed|stationed overseas)\b/i, 2]] },
+const CATEGORY_PATTERNS: Array<[Category, RegExp]> = [
+  ["Grandparent/Family Emergency Scam", /\b(grandma|grandpa|grandson|granddaughter|grandmother|grandfather|it'?s me|car accident|in jail|bail)\b/gi],
+  ["Tech Support Scam", /\b(microsoft|windows|virus|malware|remote access|anydesk|teamviewer|technician|your computer|ip address)\b/gi],
+  ["Government Imposter Scam", /\b(irs|cra|revenue|social security|social insurance|warrant|taxes|government|federal|customs|immigration|investigator|fbi|court|arrest)\b/gi],
+  ["Romance Scam", /\b(sweetheart|darling|my love|romance|lonely|soulmate|never met)\b/gi],
+  ["Prize/Lottery Scam", /\b(prize|lottery|winner|jackpot|sweepstakes|you(?:'ve| have)? won|rebate|eligible to receive)\b/gi],
+  ["Investment/Crypto Scam", /\b(invest(?:ment|ing)?|crypto|bitcoin|trading|returns|forex|portfolio)\b/gi],
+  ["Bank/Financial Institution Imposter Scam", /\b(bank|fraud department|debit card|credit card|account (?:number|has been))\b/gi],
 ];
 
-function detectCategory(text: string): Category {
+export function detectCategory(text: string): Category {
   let best: Category = "Other/Unclear";
-  let bestScore = 0;
-  for (const { category, signals } of CATEGORY_RULES) {
-    const score = signals.reduce((sum, [re, w]) => sum + (re.test(text) ? w : 0), 0);
-    if (score > bestScore) {
-      best = category;
-      bestScore = score;
+  let top = 0;
+  for (const [name, re] of CATEGORY_PATTERNS) {
+    const hits = (text.match(re) ?? []).length;
+    if (hits > top) {
+      top = hits;
+      best = name;
     }
   }
-  return bestScore >= 3 ? best : "Other/Unclear";
+  return categories.includes(best) ? best : "Other/Unclear";
+}
+
+export function riskFromCounts(counts: Record<Tactic, number>, flagged: number, total: number): number {
+  if (!flagged) return 6;
+  const distinct = tactics.filter((t) => counts[t] > 0);
+  let s = distinct.reduce((a, t) => a + WEIGHT[t], 0) + Math.round((flagged / Math.max(total, 1)) * 30);
+  if (counts.payment_request && (counts.threat || counts.authority_impersonation || counts.isolation || counts.urgency)) s = Math.max(s, 80);
+  return Math.max(15, Math.min(98, s));
+}
+
+/** Lower bound the LLM score may not fall below, given the tactics it found. */
+export function riskFloor(counts: Record<Tactic, number>): number {
+  const distinct = tactics.filter((t) => counts[t] > 0).length;
+  const others = distinct - (counts.payment_request ? 1 : 0);
+  if (counts.payment_request && others > 0) return 80;
+  if (counts.payment_request) return 62;
+  if (counts.threat && counts.authority_impersonation) return 72;
+  if (distinct >= 3) return 58;
+  if (distinct >= 2) return 40;
+  return 0;
+}
+
+export function verdictOf(risk: number): Verdict {
+  return risk >= 65 ? "likely_scam" : risk >= 30 ? "suspicious" : "likely_legitimate";
+}
+
+export function countTactics(segments: Array<{ tactic: TacticValue }>): Record<Tactic, number> {
+  return Object.fromEntries(tactics.map((t) => [t, segments.filter((s) => s.tactic === t).length])) as Record<Tactic, number>;
+}
+
+export function neutralNote(speaker: Speaker): string {
+  return speaker === "victim"
+    ? "Recipient's reply. Recipients carry no coercive tactic."
+    : "Context-setting line with no request, pressure or credential ask.";
+}
+
+export function buildSummary(category: Category, counts: Record<Tactic, number>, flagged: number): string {
+  if (!flagged) return "No clear manipulation tactics were found, but stay cautious with unexpected callers who ask for money or personal details.";
+  const top = tactics
+    .filter((t) => counts[t] > 0)
+    .sort((a, b) => counts[b] - counts[a])
+    .slice(0, 3)
+    .map((t) => t.replace(/_/g, " "));
+  return `This call matches a ${category.toLowerCase()} and pressures the recipient with ${top.join(", ")}.`;
+}
+
+export function heuristicTurns(turns: Turn[]): Analysis {
+  const speakers = inferSpeakers(turns);
+  const segments: Segment[] = turns.map((t, i) => {
+    const speaker = speakers[i] ?? "unknown";
+    const tactic = detectTactic(t.text, speaker);
+    return {
+      text: t.text,
+      timestamp: t.start,
+      speaker,
+      tactic,
+      explanation: tactic === "none" ? neutralNote(speaker) : TACTIC_EXPLAIN[tactic],
+      counterAdvice: tactic === "none" ? "" : TACTIC_COUNTER[tactic],
+    };
+  });
+  const counts = countTactics(segments);
+  const flagged = segments.filter((s) => s.tactic !== "none").length;
+  const callerText = segments.filter((s) => s.speaker !== "victim").map((s) => s.text).join(" ");
+  const category = detectCategory(callerText);
+  const riskScore = riskFromCounts(counts, flagged, segments.length);
+  return {
+    riskScore,
+    category,
+    verdict: verdictOf(riskScore),
+    summary: buildSummary(category, counts, flagged),
+    tacticCounts: counts,
+    segments,
+    inputMode: "fallback",
+  };
 }
 
 export function heuristicFallback(transcript: string): Analysis {
-  const trimmed = transcript.trim();
-  const turns = splitTurns(trimmed);
-  const lines = turns.length > 0 ? turns : [trimmed || "(empty transcript)"];
-
-  const forced: Array<Speaker | null> = lines.map((l) =>
-    CALLER_LABEL.test(l) ? "caller" : RECIPIENT_LABEL.test(l) ? "recipient" : null
-  );
-  const speakers = inferSpeakers(lines, forced);
-
-  const flaggedTactics: Array<Tactic | null> = lines.map((line, i) => {
-    if (speakers[i] === "recipient") return null;
-    return detectTactic(line.replace(ANY_LABEL, ""));
-  });
-
-  const tacticCounts = Object.fromEntries(
-    tactics.map((t) => [t, flaggedTactics.filter((f) => f === t).length])
-  ) as Analysis["tacticCounts"];
-
-  const flagged = flaggedTactics.filter(Boolean).length;
-  const present = tactics.filter((t) => tacticCounts[t] > 0);
-
-  let score = present.reduce((sum, t) => sum + WEIGHT[t], 0);
-  score += Math.min(14, Math.max(0, flagged - present.length) * 3);
-  const pressure = tacticCounts.threat + tacticCounts.isolation + tacticCounts.urgency > 0;
-  if (tacticCounts.payment_request > 0 && (pressure || tacticCounts.authority_impersonation > 0)) score += 12;
-  if (tacticCounts.personal_info_request > 0 && tacticCounts.authority_impersonation > 0) score += 8;
-  if (present.length === 1 && (present[0] === "authority_impersonation" || present[0] === "urgency")) {
-    score = Math.min(score, 24); // one weak signal alone is not a scam
-  }
-  if (present.length === 0) score = 4;
-  const riskScore = Math.max(3, Math.min(98, Math.round(score)));
-
-  const verdict: Verdict = riskScore >= 65 ? "likely_scam" : riskScore >= 30 ? "suspicious" : "likely_legitimate";
-  const scamContext = verdict !== "likely_legitimate";
-  const category = scamContext ? detectCategory(trimmed) : "Other/Unclear";
-
-  const segments: Segment[] = lines.map((raw, i) => {
-    const text = raw.replace(CALLER_LABEL, "").replace(RECIPIENT_LABEL, "").trim() || raw;
-    const speaker = speakers[i] ?? "unknown";
-    const tactic = flaggedTactics[i];
-    if (tactic) {
-      return { text, speaker, tactic, explanation: EXPLAIN[tactic].why, counterAdvice: EXPLAIN[tactic].advice };
-    }
-    if (speaker === "recipient") {
-      return {
-        text,
-        speaker,
-        tactic: "none",
-        explanation: "Recipient turn — asking questions or responding is exactly the right instinct.",
-        counterAdvice: "Keep asking questions, and verify through a number you look up yourself.",
-      };
-    }
-    return {
-      text,
-      speaker,
-      tactic: "none",
-      explanation: scamContext
-        ? "Context-building line: no primary tactic on its own, but it advances the pretext."
-        : "Dialogue turn without coercion signatures.",
-      counterAdvice: "Verify unexpected requests independently.",
-    };
-  });
-
-  const names = present.map((t) => t.replace(/_/g, " ")).join(", ");
-  const summary =
-    verdict === "likely_scam"
-      ? `Offline scan found ${present.length} coercion vectors (${names}) in a pattern typical of ${category === "Other/Unclear" ? "a phone scam" : `a ${category.toLowerCase()}`} — treat it as fraud and disengage.`
-      : verdict === "suspicious"
-      ? `Offline scan flagged ${flagged} line${flagged === 1 ? "" : "s"} (${names}) — not conclusive, but verify independently before acting.`
-      : "No coercive pattern detected — this reads like an ordinary conversation.";
-
-  return { riskScore, category, verdict, summary, tacticCounts, inputMode: "fallback", segments };
+  const turns = parseTurns(transcript);
+  return heuristicTurns(turns.length ? turns : [{ text: transcript.trim() || "(empty)" }]);
 }
